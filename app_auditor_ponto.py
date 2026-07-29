@@ -104,6 +104,12 @@ if arquivos_ponto:
                 
                 # 2. Padroniza os nomes caso você tenha digitado diferente na planilha
                 mapeamento = {
+                    "1. Data": "Data",
+                    "1. Colaboradores Alocados (Marque todos que estiveram presentes no serviço)": "Colaborador",
+                    "2. Supervisor Responsável": "Líder",
+                    "3. Cliente / Obra (Selecione a obra atual)": "Obra",
+                    "1. Horário de Início das Atividades": "Hora Início",
+                    "2. Horário de Término das Atividades": "Hora Término",
                     "Colaboradores": "Colaborador",
                     "Supervisor": "Líder",
                     "Início": "Hora Início",
