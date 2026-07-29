@@ -97,6 +97,29 @@ if arquivos_ponto:
             dados_diario_bruto = aba_diario.get_all_records()
             df_diario = pd.DataFrame(dados_diario_bruto)
             
+            # --- NOVA TRAVA DE SEGURANÇA (LIMPEZA DAS COLUNAS) ---
+            if not df_diario.empty:
+                # 1. Limpa espaços em branco invisíveis de todos os títulos
+                df_diario.columns = df_diario.columns.str.strip() 
+                
+                # 2. Padroniza os nomes caso você tenha digitado diferente na planilha
+                mapeamento = {
+                    "Colaboradores": "Colaborador",
+                    "Supervisor": "Líder",
+                    "Início": "Hora Início",
+                    "Término": "Hora Término"
+                }
+                df_diario.rename(columns=mapeamento, inplace=True)
+                
+                # 3. Verifica se a coluna 'Data' foi encontrada
+                if 'Data' not in df_diario.columns:
+                    st.error(f"🚨 Não encontrei a coluna 'Data' na aba DIÁRIO DE OBRA. O que eu encontrei foi: {list(df_diario.columns)}")
+                    st.stop()
+            else:
+                st.error("🚨 A aba do Diário de Obras está completamente vazia.")
+                st.stop()
+            # -----------------------------------------------------
+            
             registros_ponto = []
             
             for arquivo in arquivos_ponto:
