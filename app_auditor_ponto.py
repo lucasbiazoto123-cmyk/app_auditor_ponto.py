@@ -209,64 +209,64 @@ if arquivos_ponto:
                 # 1. Padroniza as datas do Diário para garantir que estão em DD/MM/YYYY
                 df_diario['Data'] = df_diario['Data'].apply(formatar_data)
                 
-                # 2. Cria uma coluna invisível de calendário real para fazermos o filtro
+                # 2. Cria colunas de data real para filtro
                 df_ponto['Data_Temp'] = pd.to_datetime(df_ponto['Data'], format='%d/%m/%Y', errors='coerce')
                 df_diario['Data_Temp'] = pd.to_datetime(df_diario['Data'], format='%d/%m/%Y', errors='coerce')
                 
-                # 3. Descobre quais MESES estão dentro dos arquivos de ponto que você subiu
+                # 3. Descobre quais MESES estão nos arquivos de ponto
                 meses_auditoria = df_ponto['Data_Temp'].dropna().dt.to_period('M').unique()
                 
-                # 4. A MÁGICA: Corta do Diário de Obras tudo que for de meses antigos/futuros
+                # 4. Filtra apenas os meses que o ponto possui
                 df_diario = df_diario[df_diario['Data_Temp'].dt.to_period('M').isin(meses_auditoria)]
 
             relatorio_colab = {}
             
-            todas_datas = set(df_diario['Data'].unique()).union(set(df_ponto['Data'].unique()) if not df_ponto.empty else set())
-            todos_colaboradores = set(df_diario['Colaborador'].unique()).union(set(df_ponto['Colaborador'].unique()) if not df_ponto.empty else set())
-            
-            # Limpando datas zoadas (NaN) que podem ter sobrado
-            todas_datas = {d for d in todas_datas if str(d) not in ["nan", "NaT", ""]}
-            
-            # Ordenar as datas para o relatório ficar cronológico
-            todas_datas_ordenadas = sorted(list(todas_datas), key=lambda x: datetime.strptime(x, "%d/%m/%Y") if isinstance(x, str) and len(x) >= 10 else datetime.now())
+            # Pega lista única de colaboradores de ambos os lados
+            todos_colaboradores = sorted(list(set(df_diario['Colaborador'].unique()).union(set(df_ponto['Colaborador'].unique()))))
+            todas_datas = sorted(list(set(df_diario['Data'].unique()).union(set(df_ponto['Data'].unique()))), key=lambda x: datetime.strptime(x, "%d/%m/%Y"))
 
-            for colab in sorted(list(todos_colaboradores)):
-                if str(colab) == "" or str(colab) == "Desconhecido": continue
+            for colab in todos_colaboradores:
+                if str(colab).strip() in ["", "nan", "Desconhecido"]: continue
                 
-                for data in todas_datas_ordenadas:
-                    # Busca nos dois mundos
+                relatorio_colab[colab] = {"falta_diario": [], "falta_ponto": [], "divergencia": []}
+                
+                for data in todas_datas:
+                    # Filtra o colaborador e a data exata
                     tem_no_diario = df_diario[(df_diario['Data'] == data) & (df_diario['Colaborador'] == colab)]
                     tem_no_ponto = df_ponto[(df_ponto['Data'] == data) & (df_ponto['Colaborador'] == colab)] if not df_ponto.empty else pd.DataFrame()
                     
-                    if not tem_no_ponto.empty or not tem_no_diario.empty:
-                        # Se achou algo, cria a "pastinha" do colaborador no relatório se não existir
-                        if colab not in relatorio_colab:
-                            relatorio_colab[colab] = {"falta_diario": [], "falta_ponto": [], "divergencia": []}
-                    
-                    # REGRA 1: Bateu Ponto, mas NÃO está no Diário (Cobrar o Líder)
+                    # REGRA 1: Bateu Ponto, mas NÃO está no Diário
                     if not tem_no_ponto.empty and tem_no_diario.empty:
-                        lider_sugerido = "Líder Desconhecido"
-                        historico_diario = df_diario[df_diario['Colaborador'] == colab]
-                        if not historico_diario.empty and 'Líder' in historico_diario.columns:
-                            lider_sugerido = historico_diario['Líder'].mode()[0]
-                            
-                        relatorio_colab[colab]["falta_diario"].append(f"**Dia {data}** (Sugestão de cobrança: {lider_sugerido})")
+                        lider_sugerido = df_diario[df_diario['Colaborador'] == colab]['Líder'].mode()[0] if not df_diario[df_diario['Colaborador'] == colab].empty else "Líder Desconhecido"
+                        relatorio_colab[colab]["falta_diario"].append(f"Dia {data} (Cobrar: {lider_sugerido})")
                         
                     # REGRA 2: Está no Diário, mas NÃO bateu Ponto
                     elif not tem_no_diario.empty and tem_no_ponto.empty:
-                        lider = tem_no_diario.iloc[0]['Líder'] if 'Líder' in tem_no_diario.columns else "Líder"
-                        obra = tem_no_diario.iloc[0]['Obra'] if 'Obra' in tem_no_diario.columns else "Obra"
-                        relatorio_colab[colab]["falta_ponto"].append(f"**Dia {data}** (Diário de: {lider} na {obra})")
+                        lider = tem_no_diario.iloc[0]['Líder']
+                        obra = tem_no_diario.iloc[0]['Obra']
+                        relatorio_colab[colab]["falta_ponto"].append(f"Dia {data} (Diário de: {lider} na {obra})")
                         
-                    # REGRA 3: Está nos dois. Analisar Tolerância de 5 Minutos.
+                    # REGRA 3: Divergência de Horário
                     elif not tem_no_diario.empty and not tem_no_ponto.empty:
-                        entrada_diario = str(tem_no_diario.iloc[0]['Hora Início']) if 'Hora Início' in tem_no_diario.columns else "00:00"
-                        saida_diario = str(tem_no_diario.iloc[0]['Hora Término']) if 'Hora Término' in tem_no_diario.columns else "00:00"
-                        
+                        entrada_diario = str(tem_no_diario.iloc[0]['Hora Início'])[:5]
+                        saida_diario = str(tem_no_diario.iloc[0]['Hora Término'])[:5]
                         entrada_ponto = tem_no_ponto.iloc[0]['Entrada_Ponto']
                         saida_ponto = tem_no_ponto.iloc[0]['Saida_Ponto']
                         
-                        diff_entrada = calcular_diferenca_minutos(entrada_ponto, entrada_diario)
+                        if calcular_diferenca_minutos(entrada_ponto, entrada_diario) > 5 or calcular_diferenca_minutos(saida_ponto, saida_diario) > 5:
+                            relatorio_colab[colab]["divergencia"].append(f"Dia {data}: Entrada {entrada_ponto} (Diário: {entrada_diario}) | Saída {saida_ponto} (Diário: {saida_diario})")
+
+            st.divider()
+            st.markdown("## 📊 Resultados por Colaborador")
+            st.markdown("---")
+            st.markdown("**Legenda:** ❌ Falta no Diário (Bateu ponto, mas o líder não lançou) | 👻 Falta no Ponto (Líder lançou no diário, mas não há registro no relógio)")
+            
+            for colab, alertas in relatorio_colab.items():
+                if alertas["falta_diario"] or alertas["falta_ponto"] or alertas["divergencia"]:
+                    with st.expander(f"👷 {colab}", expanded=True):
+                        if alertas["falta_diario"]: st.error("❌ **Falta no Diário:** " + ", ".join(alertas["falta_diario"]))
+                        if alertas["falta_ponto"]: st.warning("👻 **Falta no Ponto:** " + ", ".join(alertas["falta_ponto"]))
+                        if alertas["divergencia"]: st.info("⏰ **Divergência:** " + ", ".join(alertas["divergencia"]))
                         diff_saida = calcular_diferenca_minutos(saida_ponto, saida_diario)
                         
                         erros_horario = []
