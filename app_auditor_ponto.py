@@ -205,38 +205,58 @@ if arquivos_ponto:
 
             df_ponto = pd.DataFrame(registros_ponto)
 
-            alertas_falta_diario = []
-            alertas_falta_ponto = []
-            alertas_divergencia = []
+            if not df_ponto.empty:
+                # 1. Padroniza as datas do Diário para garantir que estão em DD/MM/YYYY
+                df_diario['Data'] = df_diario['Data'].apply(formatar_data)
+                
+                # 2. Cria uma coluna invisível de calendário real para fazermos o filtro
+                df_ponto['Data_Temp'] = pd.to_datetime(df_ponto['Data'], format='%d/%m/%Y', errors='coerce')
+                df_diario['Data_Temp'] = pd.to_datetime(df_diario['Data'], format='%d/%m/%Y', errors='coerce')
+                
+                # 3. Descobre quais MESES estão dentro dos arquivos de ponto que você subiu
+                meses_auditoria = df_ponto['Data_Temp'].dropna().dt.to_period('M').unique()
+                
+                # 4. A MÁGICA: Corta do Diário de Obras tudo que for de meses antigos/futuros
+                df_diario = df_diario[df_diario['Data_Temp'].dt.to_period('M').isin(meses_auditoria)]
+
+            relatorio_colab = {}
             
             todas_datas = set(df_diario['Data'].unique()).union(set(df_ponto['Data'].unique()) if not df_ponto.empty else set())
             todos_colaboradores = set(df_diario['Colaborador'].unique()).union(set(df_ponto['Colaborador'].unique()) if not df_ponto.empty else set())
             
-            for data in todas_datas:
-                if str(data) == "" or str(data) == "nan": continue
+            # Limpando datas zoadas (NaN) que podem ter sobrado
+            todas_datas = {d for d in todas_datas if str(d) not in ["nan", "NaT", ""]}
+            
+            # Ordenar as datas para o relatório ficar cronológico
+            todas_datas_ordenadas = sorted(list(todas_datas), key=lambda x: datetime.strptime(x, "%d/%m/%Y") if isinstance(x, str) and len(x) >= 10 else datetime.now())
+
+            for colab in sorted(list(todos_colaboradores)):
+                if str(colab) == "" or str(colab) == "Desconhecido": continue
                 
-                for colab in todos_colaboradores:
-                    if str(colab) == "" or str(colab) == "Desconhecido": continue
-                    
+                for data in todas_datas_ordenadas:
                     # Busca nos dois mundos
                     tem_no_diario = df_diario[(df_diario['Data'] == data) & (df_diario['Colaborador'] == colab)]
                     tem_no_ponto = df_ponto[(df_ponto['Data'] == data) & (df_ponto['Colaborador'] == colab)] if not df_ponto.empty else pd.DataFrame()
+                    
+                    if not tem_no_ponto.empty or not tem_no_diario.empty:
+                        # Se achou algo, cria a "pastinha" do colaborador no relatório se não existir
+                        if colab not in relatorio_colab:
+                            relatorio_colab[colab] = {"falta_diario": [], "falta_ponto": [], "divergencia": []}
                     
                     # REGRA 1: Bateu Ponto, mas NÃO está no Diário (Cobrar o Líder)
                     if not tem_no_ponto.empty and tem_no_diario.empty:
                         lider_sugerido = "Líder Desconhecido"
                         historico_diario = df_diario[df_diario['Colaborador'] == colab]
                         if not historico_diario.empty and 'Líder' in historico_diario.columns:
-                            # Acha o líder mais comum desse cara
                             lider_sugerido = historico_diario['Líder'].mode()[0]
                             
-                        alertas_falta_diario.append(f"**{colab}** trabalhou no relógio dia {data}.\n> 🗣️ Cobrar **{lider_sugerido}** para lançar no Diário.")
+                        relatorio_colab[colab]["falta_diario"].append(f"**Dia {data}** (Sugestão de cobrança: {lider_sugerido})")
                         
                     # REGRA 2: Está no Diário, mas NÃO bateu Ponto
                     elif not tem_no_diario.empty and tem_no_ponto.empty:
                         lider = tem_no_diario.iloc[0]['Líder'] if 'Líder' in tem_no_diario.columns else "Líder"
                         obra = tem_no_diario.iloc[0]['Obra'] if 'Obra' in tem_no_diario.columns else "Obra"
-                        alertas_falta_ponto.append(f"**{colab}** está no diário do(a) **{lider}** (Obra: {obra}) dia {data}, mas não bateu ponto.")
+                        relatorio_colab[colab]["falta_ponto"].append(f"**Dia {data}** (Diário de: {lider} na {obra})")
                         
                     # REGRA 3: Está nos dois. Analisar Tolerância de 5 Minutos.
                     elif not tem_no_diario.empty and not tem_no_ponto.empty:
@@ -256,32 +276,39 @@ if arquivos_ponto:
                             erros_horario.append(f"Fim (Ponto: {saida_ponto} | Diário: {saida_diario})")
                             
                         if erros_horario:
-                            alertas_divergencia.append(f"**{colab}** (Dia {data}):\n> ⏰ Diferença > 5min: {', '.join(erros_horario)}")
+                            relatorio_colab[colab]["divergencia"].append(f"**Dia {data}** -> {', '.join(erros_horario)}")
 
             st.divider()
-            st.markdown("## 📊 Resultados da Auditoria")
+            st.markdown("## 📊 Resultados da Auditoria por Colaborador")
+            st.caption("Filtro Automático: O sistema filtrou o Diário de Obras apenas para os meses correspondentes aos arquivos de ponto enviados.")
             
-            col1, col2, col3 = st.columns(3)
+            houve_erros = False
             
-            with col1:
-                st.error("### ❌ Falta no Diário")
-                st.caption("Trabalhou no relógio, mas o líder não lançou.")
-                if alertas_falta_diario:
-                    for alerta in alertas_falta_diario: st.info(alerta)
-                else: st.success("Nenhuma pendência!")
-                    
-            with col2:
-                st.warning("### 👻 Falta no Ponto")
-                st.caption("O líder lançou, mas a pessoa não bateu o ponto.")
-                if alertas_falta_ponto:
-                    for alerta in alertas_falta_ponto: st.info(alerta)
-                else: st.success("Nenhuma pendência!")
-                    
-            with col3:
-                st.info("### ⏰ Divergência de Horário")
-                st.caption("Diferença maior que 5 minutos.")
-                if alertas_divergencia:
-                    for alerta in alertas_divergencia: st.warning(alerta)
-                else: st.success("Horários batendo perfeitamente!")
+            for colab, alertas in relatorio_colab.items():
+                # Só mostra o colaborador se ele tiver algum tipo de alerta
+                if alertas["falta_diario"] or alertas["falta_ponto"] or alertas["divergencia"]:
+                    houve_erros = True
+                    with st.expander(f"👷 {colab}", expanded=True):
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            if alertas["falta_diario"]:
+                                st.error("❌ **Falta no Diário**\n" + "\n".join([f"- {msg}" for msg in alertas["falta_diario"]]))
+                            else:
+                                st.success("❌ Falta no Diário\n- Tudo OK")
+                                
+                        with col2:
+                            if alertas["falta_ponto"]:
+                                st.warning("👻 **Falta no Ponto**\n" + "\n".join([f"- {msg}" for msg in alertas["falta_ponto"]]))
+                            else:
+                                st.success("👻 Falta no Ponto\n- Tudo OK")
+                                
+                        with col3:
+                            if alertas["divergencia"]:
+                                st.info("⏰ **Divergência de Horário**\n" + "\n".join([f"- {msg}" for msg in alertas["divergencia"]]))
+                            else:
+                                st.success("⏰ Horários\n- Batendo")
 
-            st.balloons()
+            if not houve_erros:
+                st.success("Tudo perfeito! Nenhuma divergência encontrada no período analisado.")
+                st.balloons()
