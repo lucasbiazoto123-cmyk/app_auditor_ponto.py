@@ -1,63 +1,67 @@
 import streamlit as st
 import pandas as pd
 import pdfplumber
-from datetime import datetime
 import json
 import gspread
 from google.oauth2.service_account import Credentials
-import re
 
-st.set_page_config(page_title="Auditor de Ponto", layout="wide")
+st.set_page_config(page_title="Auditoria ITON", layout="wide")
 
-# --- CONEXÃO GOOGLE ---
+# 1. CONEXÃO GOOGLE (DIÁRIO DE OBRAS)
 @st.cache_resource
-def conectar_diario():
-    try:
-        credenciais_dict = json.loads(st.secrets["google_credentials"])
-        creds = Credentials.from_service_account_info(credenciais_dict, scopes=["https://www.googleapis.com/auth/spreadsheets"])
-        client = gspread.authorize(creds)
-        return client.open_by_url("https://docs.google.com/spreadsheets/d/1oI9pPGXngdE1jrOaQGIRhHMfLnt_Evh9tN_9lQkLaOU/edit").worksheet("DIÁRIO DE OBRA")
-    except: return None
+def carregar_diario():
+    cred = json.loads(st.secrets["google_credentials"])
+    creds = Credentials.from_service_account_info(cred, scopes=["https://www.googleapis.com/auth/spreadsheets"])
+    client = gspread.authorize(creds)
+    # Busca a planilha de Diário de Obras
+    sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1oI9pPGXngdE1jrOaQGIRhHMfLnt_Evh9tN_9lQkLaOU/edit").worksheet("DIÁRIO DE OBRA")
+    df = pd.DataFrame(sheet.get_all_records())
+    # Renomear para colunas padrão: 'Data', 'Colaborador', 'Entrada', 'Saida'
+    # Ajuste conforme os nomes exatos das suas colunas no Google Sheets
+    return df
 
-aba_diario = conectar_diario()
-
-# --- FUNÇÃO DE LEITURA ROBUSTA ---
-def extrair_dados_pdf(arquivo):
-    lista_dias = []
+# 2. LEITURA PRECISA DO PDF (Apenas linhas com data)
+def ler_pdf_ponto(arquivo):
+    registros = []
     with pdfplumber.open(arquivo) as pdf:
-        page = pdf.pages[0]
-        text = page.extract_text()
-        
-        colab = "Desconhecido"
-        for line in text.split('\n'):
-            if "Colaborador" in line:
-                colab = re.sub(r'^\d+\s+', '', line.split("Colaborador")[1].strip())
-        
-        # O padrão regex busca data DD/MM/AAAA e horários HH:MM
-        for line in text.split('\n'):
-            match = re.search(r'(\d{2}/\d{2}/\d{4})', line)
-            if match:
-                data = match.group(1)
-                horarios = re.findall(r'(\d{2}:\d{2})', line)
-                
-                if len(horarios) >= 2:
-                    lista_dias.append({
-                        "Data": data,
-                        "Colaborador": colab,
-                        "Entrada": horarios[0],
-                        "Saida": horarios[-1]
-                    })
-    return lista_dias
+        nome_colaborador = ""
+        for page in pdf.pages:
+            text = page.extract_text()
+            if not nome_colaborador:
+                for line in text.split('\n'):
+                    if "Colaborador" in line:
+                        nome_colaborador = line.split("Colaborador")[1].strip()
+            
+            # Pega a tabela de pontos
+            for table in page.extract_tables():
+                for row in table:
+                    # Verifica se a linha começa com data (DD/MM/AAAA)
+                    if row[0] and len(row[0]) >= 10 and row[0][2] == '/':
+                        data = row[0][:10]
+                        # Aqui extraímos o horário de Entrada e Saída da linha
+                        # Ajuste os índices conforme a estrutura que você me enviou
+                        entrada = row[7] if row[7] else "Ausente"
+                        saida = row[8] if row[8] else "Ausente"
+                        registros.append({"Data": data, "Colaborador": nome_colaborador, "Entrada": entrada, "Saida": saida})
+    return registros
 
-# --- INTERFACE ---
-st.title("🕵️ Auditor Inteligente")
-arquivos = st.file_uploader("Arraste os PDFs:", type=['pdf'], accept_multiple_files=True)
+# 3. INTERFACE E LÓGICA DE AUDITORIA
+st.title("🕵️ Auditoria Real: Ponto vs Diário")
+arquivos = st.file_uploader("Upload dos PDFs de Ponto", accept_multiple_files=True)
 
-if arquivos and st.button("🚀 Processar Auditoria"):
-    todos_dados = []
+if arquivos and st.button("Executar Auditoria"):
+    df_diario = carregar_diario()
+    todos_pontos = []
     for f in arquivos:
-        todos_dados.extend(extrair_dados_pdf(f))
+        todos_pontos.extend(ler_pdf_ponto(f))
+    df_ponto = pd.DataFrame(todos_pontos)
     
-    df_ponto = pd.DataFrame(todos_dados)
-    st.success("Dados extraídos com sucesso!")
-    st.dataframe(df_ponto)
+    st.write("### Comparativo")
+    # A lógica aqui será: cruzar df_ponto com df_diario e mostrar as divergências
+    # Você quer ver: "Fulano trabalhou na obra dia X, mas no ponto consta Y"
+    st.dataframe(df_ponto) 
+```
+
+**Por favor, me confirme:**
+1. A tabela que aparece agora no seu app está mostrando corretamente o Nome, Data, Entrada e Saída?
+2. Se estiver, o próximo passo é eu terminar a função de cruzamento que vai listar, para cada pessoa, as datas que estão no Diário mas não no Ponto (e vice-versa). **É exatamente isso que você quer ver agora?**
